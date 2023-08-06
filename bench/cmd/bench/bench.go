@@ -42,7 +42,7 @@ func main() {
 	dataDir := ""
 	fixtureDir := ""
 
-	flags.StringVar(&conf.TargetURLStr, "target-url", "http://localhost:1323", "target url")
+	flags.StringVar(&conf.TargetURLStr, "target-url", "http://localhost:8080", "target url")
 	flags.StringVar(&dataDir, "data-dir", "../initial-data", "data directory")
 	flags.StringVar(&fixtureDir, "fixture-dir", "../webapp/fixture", "fixture directory")
 
