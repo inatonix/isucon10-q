@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -21,7 +22,6 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo"
 	"github.com/labstack/echo/middleware"
-	"github.com/labstack/gommon/log"
 )
 
 const Limit = 20
@@ -244,11 +244,56 @@ func init() {
 	json.Unmarshal(jsonText, &estateSearchCondition)
 }
 
+func matchesUserAgent(userAgent string) bool {
+	regexes := []string{
+		"ISUCONbot(-Mobile)?",
+		"ISUCONbot-Image/",
+		"Mediapartners-ISUCON",
+		"ISUCONCoffee",
+		"ISUCONFeedSeeker(Beta)?",
+		"crawler \\(https://isucon\\.invalid/(support/faq/|help/jp/)",
+		"isubot",
+		"Isupider",
+		"Isupider(-image)?\\+",
+		"(bot|crawler|spider)(?:[-_ ./;@()]|$)",
+	}
+
+	for _, r := range regexes {
+		matched, err := regexp.MatchString("(?i)"+r, userAgent)
+		if err != nil {
+			panic(err)
+		}
+		if matched {
+			return true
+		}
+	}
+
+	return false
+}
+
+func myMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		userAgent := c.Request().Header.Get("User-Agent")
+
+		if matchesUserAgent(userAgent) {
+			fmt.Println("bot access: %v\n", userAgent)
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "bot access is not allowed")
+		}
+
+		fmt.Println("弾かなかった", userAgent)
+
+		if err := next(c); err != nil {
+			c.Error(err)
+		}
+		return nil
+	}
+}
+
 func main() {
 	// Echo instance
 	e := echo.New()
 	e.Debug = true
-	e.Logger.SetLevel(log.DEBUG)
+	// e.Logger.SetLevel(log.DEBUG)
 
 	runtime.SetBlockProfileRate(1)
 	runtime.SetMutexProfileFraction(1)
@@ -259,6 +304,7 @@ func main() {
 	// Middleware
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
+	e.Use(myMiddleware)
 
 	pprofGroup := e.Group("/debug/pprof")
 	pprofGroup.Any("/cmdline", echo.WrapHandler(http.HandlerFunc(pprof.Cmdline)))
@@ -358,6 +404,8 @@ func getChairDetail(c echo.Context) error {
 }
 
 func postChair(c echo.Context) error {
+	fmt.Println("椅子が追加された")
+
 	header, err := c.FormFile("chairs")
 	if err != nil {
 		c.Logger().Errorf("failed to get form file: %v", err)
@@ -532,6 +580,7 @@ func searchChairs(c echo.Context) error {
 		c.Logger().Errorf("searchChairs DB execution error : %v", err)
 		return c.NoContent(http.StatusInternalServerError)
 	}
+	fmt.Println("椅子の総数は ", res.Count, "です")
 
 	chairs := []Chair{}
 	params = append(params, perPage, page*perPage)
@@ -800,7 +849,6 @@ func searchEstates(c echo.Context) error {
 		c.Logger().Errorf("searchEstates DB execution error : %v", err)
 		return c.NoContent(http.StatusInternalServerError)
 	}
-
 	estates := []Estate{}
 	params = append(params, perPage, page*perPage)
 	err = db.Select(&estates, searchQuery+searchCondition+limitOffset, params...)
@@ -886,7 +934,6 @@ func searchEstateNazotte(c echo.Context) error {
 	polygonText := coordinates.coordinatesToText()
 	query := fmt.Sprintf(`SELECT * FROM estate WHERE latitude <= ? 
 		AND latitude >= ? AND longitude <= ? AND longitude >= ? AND ST_Contains(ST_PolygonFromText(%s), POINT(latitude, longitude)) ORDER BY popularity_desc ASC, id ASC`, polygonText)
-	fmt.Println("クエリ ", query)
 
 	err = db.Select(&estatesInBoundingBox, query, b.BottomRightCorner.Latitude, b.TopLeftCorner.Latitude, b.BottomRightCorner.Longitude, b.TopLeftCorner.Longitude)
 	if err == sql.ErrNoRows {
