@@ -350,6 +350,8 @@ func main() {
 }
 
 func initialize(c echo.Context) error {
+	countChairMap = map[string]int64{}
+
 	sqlDir := filepath.Join("..", "mysql", "db")
 	paths := []string{
 		filepath.Join(sqlDir, "0_Schema.sql"),
@@ -461,7 +463,15 @@ func postChair(c echo.Context) error {
 	return c.NoContent(http.StatusCreated)
 }
 
+var countChairMap map[string]int64 = map[string]int64{}
+var searchChairCache = map[string]ChairSearchResponse{}
+var estateCache = map[string]EstateSearchResponse{}
+
 func searchChairs(c echo.Context) error {
+	if v, ok := searchChairCache[c.QueryString()]; ok {
+		return c.JSON(http.StatusOK, v)
+	}
+
 	conditions := make([]string, 0)
 	params := make([]interface{}, 0)
 
@@ -575,12 +585,21 @@ func searchChairs(c echo.Context) error {
 	limitOffset := " ORDER BY popularity_desc ASC, id ASC LIMIT ? OFFSET ?"
 
 	var res ChairSearchResponse
-	err = db.Get(&res.Count, countQuery+searchCondition, params...)
-	if err != nil {
-		c.Logger().Errorf("searchChairs DB execution error : %v", err)
-		return c.NoContent(http.StatusInternalServerError)
+
+	priceRangeID := c.QueryParam("priceRangeId")
+	if v, ok := countChairMap[priceRangeID]; ok {
+		res.Count = v
+	} else {
+		err = db.Get(&res.Count, countQuery+searchCondition, params...)
+		if err != nil {
+			c.Logger().Errorf("searchChairs DB execution error : %v", err)
+			return c.NoContent(http.StatusInternalServerError)
+		}
+		countChairMap[priceRangeID] = res.Count
+		fmt.Println(priceRangeID, "に関して記録しました")
 	}
-	fmt.Println("椅子の総数は ", res.Count, "です")
+	// fmt.Println("count用のQueryは", countQuery+searchCondition)
+	// fmt.Println("椅子の総数は ", res.Count, "です")
 
 	chairs := []Chair{}
 	params = append(params, perPage, page*perPage)
@@ -595,6 +614,7 @@ func searchChairs(c echo.Context) error {
 
 	res.Chairs = chairs
 
+	searchChairCache[c.QueryString()] = res
 	return c.JSON(http.StatusOK, res)
 }
 
@@ -647,6 +667,7 @@ func buyChair(c echo.Context) error {
 		return c.NoContent(http.StatusInternalServerError)
 	}
 
+	searchChairCache = map[string]ChairSearchResponse{} // キャッシュクリア
 	return c.NoContent(http.StatusOK)
 }
 
@@ -756,10 +777,16 @@ func postEstate(c echo.Context) error {
 		c.Logger().Errorf("failed to commit tx: %v", err)
 		return c.NoContent(http.StatusInternalServerError)
 	}
+	estateCache = map[string]EstateSearchResponse{} // キャッシュクリア
+
 	return c.NoContent(http.StatusCreated)
 }
 
 func searchEstates(c echo.Context) error {
+	if e, ok := estateCache[c.QueryString()]; ok {
+		return c.JSON(http.StatusOK, e)
+	}
+
 	conditions := make([]string, 0)
 	params := make([]interface{}, 0)
 
@@ -841,6 +868,8 @@ func searchEstates(c echo.Context) error {
 	searchQuery := "SELECT * FROM estate WHERE "
 	countQuery := "SELECT COUNT(*) FROM estate WHERE "
 	searchCondition := strings.Join(conditions, " AND ")
+	fmt.Println("検索の条件は ", searchCondition, params)
+
 	limitOffset := " ORDER BY popularity_desc ASC, id ASC LIMIT ? OFFSET ?"
 
 	var res EstateSearchResponse
@@ -861,6 +890,7 @@ func searchEstates(c echo.Context) error {
 	}
 
 	res.Estates = estates
+	estateCache[c.QueryString()] = res
 
 	return c.JSON(http.StatusOK, res)
 }
